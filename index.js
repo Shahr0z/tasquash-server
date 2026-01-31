@@ -1,0 +1,89 @@
+import dotenv from "dotenv";
+import Express from "express";
+import cookieParser from "cookie-parser";
+import cors from "cors";
+import connectDB from "./db/index.js";
+import userRoutes from "./routes/user.routes.js";
+import skillRoutes from "./routes/skill.routes.js";
+import twoFactorRoutes from "./routes/twoFactor.routes.js";
+
+dotenv.config({ quiet: true });
+
+if (!process.env.ACCESS_TOKEN_SECRET || !process.env.REFRESH_TOKEN_SECRET) {
+    console.error("Missing required env: ACCESS_TOKEN_SECRET and REFRESH_TOKEN_SECRET must be set in .env");
+    process.exit(1);
+}
+
+const app = Express();
+
+const corsOrigin = (process.env.CORS_ORIGIN || "").trim();
+app.use(
+    cors({
+        origin: corsOrigin === "*" ? true : (corsOrigin || true),
+        credentials: true,
+    })
+);
+
+app.use(Express.json({ limit: "16kb" }));
+app.use(Express.urlencoded({ limit: "16kb", extended: true }));
+app.use(cookieParser());
+
+let isConnected = false;
+
+async function ensureDbConnection() {
+    if (isConnected) {
+        return;
+    }
+
+    try {
+        await connectDB();
+        isConnected = true;
+        console.log("✅ Database connected");
+    } catch (err) {
+        console.log("MONGO db connection failed !!! ", err);
+        throw err;
+    }
+}
+
+// Ensure DB is connected before handling requests (required for Vercel serverless)
+app.use(async (req, res, next) => {
+    try {
+        await ensureDbConnection();
+        next();
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.get("/", (req, res) => {
+    res.send("Tas-Quash Backend is Successfully  Running.");
+});
+
+// Route declarations
+app.use("/api/users", userRoutes);
+app.use("/api/skills", skillRoutes);
+app.use("/api/2fa", twoFactorRoutes);
+
+app.use((err, req, res, next) => {
+    const statusCode = err.statusCode || 500;
+    const message = err.message || "Internal server error";
+    console.error("[API Error]", statusCode, message);
+    res.status(statusCode).json({
+        success: false,
+        message,
+        ...(err.errors?.length && { errors: err.errors }),
+    });
+});
+
+const PORT = process.env.PORT || 8000;
+
+// Only start HTTP server when NOT on Vercel (local dev). On Vercel, the app is used as the serverless handler.
+if (!process.env.VERCEL) {
+    ensureDbConnection().then(() => {
+        app.listen(PORT, "0.0.0.0", () => {
+            console.log(`⚙️ Server is running at http://0.0.0.0:${PORT}`);
+        });
+    });
+}
+
+export default app;
