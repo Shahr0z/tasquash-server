@@ -109,15 +109,19 @@ const registerUser = asyncHandler(async (req, res) => {
         throw err;
     }
 
-    // Send welcome email asynchronously - don't block response on email failure
+    // Send welcome email. Must await in serverless (Vercel) so the function stays alive until send completes.
     try {
-        transporter.sendMail({
+        await transporter.sendMail({
             from: getDefaultFrom(),
             to: user.email,
             ...welcomeEmailTemplate(fullName),
-        }).catch((err) => console.error("Welcome email failed:", err?.message || err));
+        });
     } catch (err) {
-        console.error("Welcome email exception:", err?.message || err);
+        console.error("[Email] Welcome email failed:", err?.message || err);
+        throw new ApiError(
+            503,
+            "Account created but we could not send the welcome email. Please try again or contact support."
+        );
     }
 
     const options = {
@@ -268,17 +272,20 @@ const forgotPassword = asyncHandler(async (req, res) => {
         otp
     });
 
-    // Send email asynchronously without blocking response
-    transporter.sendMail({
-        from: getDefaultFrom(),
-        to: user.email,
-        ...forgotPasswordOTPTemplate(otp),
-    }).catch((err) => {
-        console.error("Forgot-password email failed:", err?.message || err);
-        if (process.env.NODE_ENV !== "production") {
-            console.log("[DEV] Forgot-password OTP for", user.email, "->", otp);
-        }
-    });
+    // Must await in serverless so the function stays alive until SMTP send completes.
+    try {
+        await transporter.sendMail({
+            from: getDefaultFrom(),
+            to: user.email,
+            ...forgotPasswordOTPTemplate(otp),
+        });
+    } catch (err) {
+        console.error("[Email] Forgot-password send failed:", err?.message || err);
+        throw new ApiError(
+            503,
+            "We could not send the OTP email. Please check your email address and try again, or contact support."
+        );
+    }
 
     return res.json(
         new ApiResponse(200, {}, "An OTP has been sent to your email address.")
