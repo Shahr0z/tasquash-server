@@ -7,13 +7,9 @@ const connectDB = async () => {
         console.error(
             "MONGODB connection FAILED: MONGODB_URI is missing or empty in .env"
         );
-        console.error(
-            "Add to your .env: MONGODB_URI=mongodb://localhost:27017/tasquash"
+        throw new Error(
+            "MONGODB_URI is missing or empty. Add MONGODB_URI to .env (e.g. mongodb://localhost:27017/tasquash or mongodb+srv://user:pass@cluster.mongodb.net/dbname)"
         );
-        console.error(
-            "Or for Atlas: MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/dbname"
-        );
-        process.exit(1);
     }
 
     const validScheme = uri.trim().startsWith("mongodb://") || uri.trim().startsWith("mongodb+srv://");
@@ -21,10 +17,9 @@ const connectDB = async () => {
         console.error(
             "MONGODB connection FAILED: MONGODB_URI must start with mongodb:// or mongodb+srv://"
         );
-        console.error(
-            "Example: MONGODB_URI=mongodb://localhost:27017/tasquash"
+        throw new Error(
+            "MONGODB_URI must start with mongodb:// or mongodb+srv://"
         );
-        process.exit(1);
     }
 
     try {
@@ -33,8 +28,8 @@ const connectDB = async () => {
             `MongoDB is Hosted !! on : ${connectionInstance.connection.host}`
         );
     } catch (error) {
-        console.log("MONGODB connection FAILED : ", error);
-        process.exit(1);
+        console.error("MONGODB connection FAILED : ", error);
+        throw error;
     }
 };
 

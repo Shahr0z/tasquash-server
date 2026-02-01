@@ -9,12 +9,19 @@ import twoFactorRoutes from "./routes/twoFactor.routes.js";
 
 dotenv.config({ quiet: true });
 
-if (!process.env.ACCESS_TOKEN_SECRET || !process.env.REFRESH_TOKEN_SECRET) {
-    console.error("Missing required env: ACCESS_TOKEN_SECRET and REFRESH_TOKEN_SECRET must be set in .env");
-    process.exit(1);
-}
-
 const app = Express();
+
+// Request-time env check (avoids process.exit in serverless; returns 503 if secrets missing)
+app.use((req, res, next) => {
+    if (!process.env.ACCESS_TOKEN_SECRET || !process.env.REFRESH_TOKEN_SECRET) {
+        console.error("Missing required env: ACCESS_TOKEN_SECRET and REFRESH_TOKEN_SECRET must be set");
+        return res.status(503).json({
+            success: false,
+            message: "Server misconfiguration: required environment variables are not set",
+        });
+    }
+    next();
+});
 
 const corsOrigin = (process.env.CORS_ORIGIN || "").trim();
 app.use(
@@ -79,11 +86,16 @@ const PORT = process.env.PORT || 8000;
 
 // Only start HTTP server when NOT on Vercel (local dev). On Vercel, the app is used as the serverless handler.
 if (!process.env.VERCEL) {
-    ensureDbConnection().then(() => {
-        app.listen(PORT, "0.0.0.0", () => {
-            console.log(`⚙️ Server is running at http://0.0.0.0:${PORT}`);
+    ensureDbConnection()
+        .then(() => {
+            app.listen(PORT, "0.0.0.0", () => {
+                console.log(`⚙️ Server is running at http://0.0.0.0:${PORT}`);
+            });
+        })
+        .catch((err) => {
+            console.error("Failed to start server:", err.message);
+            process.exit(1);
         });
-    });
 }
 
 export default app;

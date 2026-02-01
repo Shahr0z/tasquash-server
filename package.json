@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "nodemon index.js",
-    "start": "nodemon index.js"
+    "start": "node index.js",
+    "build": "echo 'No build step required for Node.js serverless'"
   },
   "keywords": [],
   "author": "",
