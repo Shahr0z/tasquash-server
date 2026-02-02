@@ -22,9 +22,10 @@ const connectDB = async () => {
         );
     }
 
+    const isVercel = !!process.env.VERCEL;
     const options = {
-        serverSelectionTimeoutMS: 10000,
-        connectTimeoutMS: 10000,
+        serverSelectionTimeoutMS: isVercel ? 6000 : 10000,
+        connectTimeoutMS: isVercel ? 6000 : 10000,
     };
 
     try {

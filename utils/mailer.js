@@ -83,29 +83,26 @@ export function isEmailConfigured() {
 /**
  * Send an email with a hard timeout so serverless always responds (no hang → no "Network Error" on client).
  * Validates config, awaits send, and logs outcome. Throws on failure so callers can return 503.
+ * Used by all controller email flows (register OTP, login OTP, forgot password, welcome).
  *
  * @param {object} options - Nodemailer sendMail options: { from, to, subject, html, ... }
  * @returns {Promise<object>} Nodemailer result
  */
 export async function sendEmail(options) {
     const { to, subject } = options;
-    const logCtx = { to, subject, env: process.env.NODE_ENV };
+    const logCtx = { to, subject, env: process.env.NODE_ENV, vercel: !!process.env.VERCEL };
     const isVercel = !!process.env.VERCEL;
-    const sendTimeoutMs = isVercel ? 7000 : 12000;
+    const sendTimeoutMs = isVercel ? 6000 : 12000;
 
-    const sendWithTimeout = () => {
-        const transporter = getTransporter();
-        return transporter.sendMail(options);
-    };
+    const transporter = getTransporter();
+    const sendPromise = transporter.sendMail(options);
 
     const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => {
-            reject(new Error(`Email send timeout after ${sendTimeoutMs}ms`));
-        }, sendTimeoutMs);
+        setTimeout(() => reject(new Error(`Email send timeout after ${sendTimeoutMs}ms`)), sendTimeoutMs);
     });
 
     try {
-        const result = await Promise.race([sendWithTimeout(), timeoutPromise]);
+        const result = await Promise.race([sendPromise, timeoutPromise]);
         console.log("[Email] Sent successfully", { ...logCtx, messageId: result.messageId });
         return result;
     } catch (err) {
