@@ -6,7 +6,8 @@ import nodemailer from "nodemailer";
  * - Config is read at runtime (not at module load) so Vercel env vars are available.
  * - Callers must await sendMail() so the function stays alive until SMTP completes.
  * - Set in Vercel: EMAIL_HOST, EMAIL_USER, EMAIL_PASS; optional: EMAIL_PORT (465/587), EMAIL_FROM.
- * - Gmail: use App Password (not account password); EMAIL_HOST=smtp.gmail.com, port 465 or 587.
+ * - Gmail: use App Password (not account password); EMAIL_HOST=smtp.gmail.com.
+ *   If email fails on Vercel with 465, set EMAIL_PORT=587 in Vercel (STARTTLS often works from data centers).
  */
 
 /**
@@ -23,6 +24,7 @@ function getEmailConfig() {
 
 /**
  * Create a transporter with current env. Use this lazily so production env vars are available.
+ * On Vercel: shorter timeouts so we don't exceed serverless function limit (10s default).
  */
 function createTransporter() {
     const { host, user, pass, port } = getEmailConfig();
@@ -37,15 +39,18 @@ function createTransporter() {
         );
     }
 
+    const isVercel = !!process.env.VERCEL;
+    const timeoutMs = isVercel ? 8000 : 15000;
+
     const secure = port === 465;
     const transportOptions = {
         host,
         port,
         secure,
         auth: { user, pass },
-        connectionTimeout: 15000,
-        greetingTimeout: 15000,
-        socketTimeout: 15000,
+        connectionTimeout: timeoutMs,
+        greetingTimeout: timeoutMs,
+        socketTimeout: timeoutMs,
     };
     if (port === 587) {
         transportOptions.requireTLS = true;
@@ -54,10 +59,13 @@ function createTransporter() {
     return nodemailer.createTransport(transportOptions);
 }
 
-/** Cached transporter (created on first send when config is present). */
+/** Cached transporter (created on first send when config is present). Not cached on Vercel so each request uses fresh env and connection. */
 let _transporter = null;
 
 function getTransporter() {
+    if (process.env.VERCEL) {
+        return createTransporter();
+    }
     if (!_transporter) {
         _transporter = createTransporter();
     }
@@ -91,11 +99,13 @@ export async function sendEmail(options) {
     } catch (err) {
         const code = err.code || err.responseCode;
         const message = err.message || String(err);
+        const response = err.response || err.responseCode;
         console.error("[Email] Send failed", {
             ...logCtx,
             error: message,
             code,
-            response: err.response,
+            response: typeof response === "string" ? response.slice(0, 200) : response,
+            command: err.command,
         });
         throw err;
     }

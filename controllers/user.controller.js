@@ -125,7 +125,7 @@ const registerUser = asyncHandler(async (req, res) => {
         } catch (err) {
             await User.findByIdAndDelete(user._id);
             await Otp.deleteOne({ userId: user._id, purpose: "register" });
-            console.error("[Email] Register OTP failed:", err?.message || err);
+            console.error("[Email] Register OTP failed:", err?.message || err, "code:", err?.code, "response:", err?.response?.slice?.(0, 100));
             throw new ApiError(
                 503,
                 "We could not send the verification code to your email. Please try again."
@@ -256,7 +256,7 @@ const resendSignupOTP = asyncHandler(async (req, res) => {
                 ...authOTPTemplate(otp, "register"),
             });
         } catch (err) {
-            console.error("[Email] Resend signup OTP failed:", err?.message || err);
+            console.error("[Email] Resend signup OTP failed:", err?.message || err, "code:", err?.code);
             throw new ApiError(503, "We could not send the code to your email. Please try again.");
         }
         return res.json(
@@ -441,7 +441,7 @@ const forgotPassword = asyncHandler(async (req, res) => {
             ...forgotPasswordOTPTemplate(otp),
         });
     } catch (err) {
-        console.error("[Email] Forgot-password send failed:", err?.message || err);
+        console.error("[Email] Forgot-password send failed:", err?.message || err, "code:", err?.code);
         throw new ApiError(
             503,
             "We could not send the OTP email. Please check your email address and try again, or contact support."
@@ -521,7 +521,7 @@ const sendLoginOTP = asyncHandler(async (req, res) => {
             });
         } catch (err) {
             await Otp.deleteOne({ userId: user._id, purpose: "login" });
-            console.error("[Email] Login OTP failed:", err?.message || err);
+            console.error("[Email] Login OTP failed:", err?.message || err, "code:", err?.code);
             throw new ApiError(
                 503,
                 "We could not send the code to your email. Please try again."
