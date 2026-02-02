@@ -3,11 +3,12 @@ import Otp from "../models/otp.model.js";
 import { User } from "../models/user.model.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
-import { generateOTP } from "../utils/common.js";
+import { generateOTP, parseEmailOrPhone } from "../utils/common.js";
 import { transporter, getDefaultFrom } from "../utils/mailer.js";
-import { forgotPasswordOTPTemplate, welcomeEmailTemplate } from "../utils/mailTemplates.js";
+import { authOTPTemplate, forgotPasswordOTPTemplate, welcomeEmailTemplate } from "../utils/mailTemplates.js";
 import { asyncHandler } from "../utils/AsyncHandler.js";
 import appleSignin from "apple-signin-auth";
+import { sendOTP, verifyOTP } from "../utils/twilio.js";
 
 const generateAccessTokenAndRefreshToken = async (userId) => {
     const user = await User.findById(userId);
@@ -67,61 +68,145 @@ const googleLogin = asyncHandler(async (req, res) => {
 
 
 
-const registerUser = asyncHandler(async (req, res) => {
-    const { email, password, role, fullName } = req.body;
+const PLACEHOLDER_EMAIL_PREFIX = "phone_";
+const PLACEHOLDER_EMAIL_SUFFIX = "@users.tasquash.app";
 
-    if (!email || !password || !fullName) {
+/** Format phone for Twilio E.164 (e.g. 1234567890 -> +1234567890). */
+function toE164(phone) {
+    const digits = String(phone).replace(/\D/g, "");
+    return digits ? `+${digits}` : "";
+}
+
+const registerUser = asyncHandler(async (req, res) => {
+    const { emailOrPhone, email: legacyEmail, password, role, fullName } = req.body;
+    const identifier = emailOrPhone ?? legacyEmail;
+
+    if (!identifier || !password || !fullName) {
         throw new ApiError(400, "All fields are required");
     }
 
-    if (!email.includes("@")) {
-        throw new ApiError(400, "Invalid email");
+    const parsed = parseEmailOrPhone(identifier);
+    if (!parsed.type) {
+        throw new ApiError(400, "Please enter a valid email or phone number");
     }
 
-    const existedUser = await User.findOne({ email });
-    if (existedUser) {
-        throw new ApiError(409, "User already exists");
+    let email, phoneNumber;
+    if (parsed.type === "email") {
+        email = parsed.email;
+        const existedUser = await User.findOne({ email });
+        if (existedUser) throw new ApiError(409, "User already exists with this email");
+    } else {
+        phoneNumber = parsed.phone;
+        const existedUser = await User.findOne({ phoneNumber });
+        if (existedUser) throw new ApiError(409, "User already exists with this phone number");
+        email = `${PLACEHOLDER_EMAIL_PREFIX}${phoneNumber}${PLACEHOLDER_EMAIL_SUFFIX}`;
     }
 
     const user = await User.create({
         email,
+        ...(phoneNumber && { phoneNumber }),
         password,
         role,
-        fullName
+        fullName,
+        ...(parsed.type === "email" && { isEmailVerified: false }),
+        ...(parsed.type === "phone" && { isPhoneVerified: false }),
     });
 
-    let accessToken, refreshToken, loggedInUser;
-    try {
-        const tokens = await generateAccessTokenAndRefreshToken(user._id);
-        accessToken = tokens.accessToken;
-        refreshToken = tokens.refreshToken;
-        loggedInUser = await User.findById(user._id).select(
-            "-password -refreshToken"
-        );
-    } catch (err) {
-        await User.findByIdAndDelete(user._id);
-        if (!process.env.ACCESS_TOKEN_SECRET || !process.env.REFRESH_TOKEN_SECRET) {
+    const otp = generateOTP();
+
+    if (parsed.type === "email") {
+        await Otp.create({ userId: user._id, purpose: "register", otp });
+        try {
+            await transporter.sendMail({
+                from: getDefaultFrom(),
+                to: user.email,
+                ...authOTPTemplate(otp, "register"),
+            });
+        } catch (err) {
+            await User.findByIdAndDelete(user._id);
+            await Otp.deleteOne({ userId: user._id, purpose: "register" });
+            console.error("[Email] Register OTP failed:", err?.message || err);
             throw new ApiError(
-                500,
-                "Server misconfiguration: ACCESS_TOKEN_SECRET and REFRESH_TOKEN_SECRET must be set in .env"
+                503,
+                "We could not send the verification code to your email. Please try again."
             );
         }
-        throw err;
+        return res.status(201).json(
+            new ApiResponse(201, {
+                requiresVerification: true,
+                type: "email",
+                emailOrPhone: user.email,
+            }, "Verification code sent to your email.")
+        );
     }
 
-    // Send welcome email. Must await in serverless (Vercel) so the function stays alive until send completes.
     try {
-        await transporter.sendMail({
-            from: getDefaultFrom(),
-            to: user.email,
-            ...welcomeEmailTemplate(fullName),
-        });
+        await sendOTP(toE164(phoneNumber), "sms");
     } catch (err) {
-        console.error("[Email] Welcome email failed:", err?.message || err);
+        await User.findByIdAndDelete(user._id);
+        console.error("[SMS] Register OTP failed:", err?.message || err);
         throw new ApiError(
             503,
-            "Account created but we could not send the welcome email. Please try again or contact support."
+            err?.message || "We could not send the verification code to your phone. Please try again."
         );
+    }
+    return res.status(201).json(
+        new ApiResponse(201, {
+            requiresVerification: true,
+            type: "phone",
+            emailOrPhone: phoneNumber,
+            phoneHint: phoneNumber.slice(-4),
+        }, "Verification code sent to your phone.")
+    );
+});
+
+const verifySignup = asyncHandler(async (req, res) => {
+    const { emailOrPhone, otp } = req.body;
+
+    if (!emailOrPhone || !otp) {
+        throw new ApiError(400, "Email/phone and OTP are required");
+    }
+
+    const parsed = parseEmailOrPhone(emailOrPhone);
+    if (!parsed.type) {
+        throw new ApiError(400, "Please enter a valid email or phone number");
+    }
+
+    const user = parsed.type === "email"
+        ? await User.findOne({ email: parsed.email })
+        : await User.findOne({ phoneNumber: parsed.phone });
+    if (!user) throw new ApiError(404, "User not found");
+
+    if (parsed.type === "email") {
+        const otpData = await Otp.findOne({ userId: user._id, purpose: "register", otp: String(otp).trim() });
+        if (!otpData) throw new ApiError(400, "Invalid or expired OTP");
+        if (otpData.expiresAt < Date.now()) {
+            await otpData.deleteOne();
+            throw new ApiError(400, "OTP expired");
+        }
+        await Otp.deleteOne({ userId: user._id, purpose: "register" });
+        user.isEmailVerified = true;
+        await user.save({ validateBeforeSave: false });
+    } else {
+        const result = await verifyOTP(toE164(parsed.phone), String(otp).trim());
+        if (!result.success) throw new ApiError(400, "Invalid or expired OTP");
+        user.isPhoneVerified = true;
+        await user.save({ validateBeforeSave: false });
+    }
+
+    const { accessToken, refreshToken } = await generateAccessTokenAndRefreshToken(user._id);
+    const loggedInUser = await User.findById(user._id).select("-password -refreshToken");
+
+    if (!user.email.startsWith(PLACEHOLDER_EMAIL_PREFIX)) {
+        try {
+            await transporter.sendMail({
+                from: getDefaultFrom(),
+                to: user.email,
+                ...welcomeEmailTemplate(user.fullName),
+            });
+        } catch (err) {
+            console.error("[Email] Welcome email failed:", err?.message || err);
+        }
     }
 
     const options = {
@@ -131,32 +216,81 @@ const registerUser = asyncHandler(async (req, res) => {
     };
 
     return res
-        .status(201)
+        .status(200)
         .cookie("accessToken", accessToken, options)
         .cookie("refreshToken", refreshToken, options)
         .json(
-            new ApiResponse(
-                201,
-                {
-                    user: loggedInUser,
-                    accessToken,
-                    refreshToken
-                },
-                "User registered and logged in successfully"
-            )
+            new ApiResponse(200, {
+                user: loggedInUser,
+                accessToken,
+                refreshToken,
+            }, "Account verified and signed in successfully")
         );
 });
 
+const resendSignupOTP = asyncHandler(async (req, res) => {
+    const { emailOrPhone } = req.body;
 
-
-const loginUser = asyncHandler(async (req, res) => {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-        throw new ApiError(400, "Email and password required");
+    if (!emailOrPhone) {
+        throw new ApiError(400, "Email or phone number is required");
     }
 
-    const user = await User.findOne({ email });
+    const parsed = parseEmailOrPhone(emailOrPhone);
+    if (!parsed.type) {
+        throw new ApiError(400, "Please enter a valid email or phone number");
+    }
+
+    const user = parsed.type === "email"
+        ? await User.findOne({ email: parsed.email })
+        : await User.findOne({ phoneNumber: parsed.phone });
+    if (!user) throw new ApiError(404, "User not found");
+
+    if (parsed.type === "email") {
+        await Otp.deleteMany({ userId: user._id, purpose: "register" });
+        const otp = generateOTP();
+        await Otp.create({ userId: user._id, purpose: "register", otp });
+        try {
+            await transporter.sendMail({
+                from: getDefaultFrom(),
+                to: user.email,
+                ...authOTPTemplate(otp, "register"),
+            });
+        } catch (err) {
+            console.error("[Email] Resend signup OTP failed:", err?.message || err);
+            throw new ApiError(503, "We could not send the code to your email. Please try again.");
+        }
+        return res.json(
+            new ApiResponse(200, {}, "Verification code sent to your email.")
+        );
+    }
+
+    try {
+        await sendOTP(toE164(parsed.phone), "sms");
+    } catch (err) {
+        console.error("[SMS] Resend signup OTP failed:", err?.message || err);
+        throw new ApiError(503, err?.message || "We could not send the code to your phone. Please try again.");
+    }
+    return res.json(
+        new ApiResponse(200, {}, "Verification code sent to your phone.")
+    );
+});
+
+const loginUser = asyncHandler(async (req, res) => {
+    const { emailOrPhone, email: legacyEmail, password } = req.body;
+    const identifier = emailOrPhone ?? legacyEmail;
+
+    if (!identifier || !password) {
+        throw new ApiError(400, "Email/phone and password required");
+    }
+
+    const parsed = parseEmailOrPhone(identifier);
+    if (!parsed.type) {
+        throw new ApiError(400, "Please enter a valid email or phone number");
+    }
+
+    const user = parsed.type === "email"
+        ? await User.findOne({ email: parsed.email })
+        : await User.findOne({ phoneNumber: parsed.phone });
     if (!user) throw new ApiError(404, "Invalid credentials");
 
     const isValidPassword = await user.isPasswordCorrect(password);
@@ -259,20 +393,47 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
 });
 
 const forgotPassword = asyncHandler(async (req, res) => {
-    const { email } = req.body;
+    const { emailOrPhone, email: legacyEmail } = req.body;
+    const identifier = emailOrPhone ?? legacyEmail;
 
-    const user = await User.findOne({ email });
+    if (!identifier) {
+        throw new ApiError(400, "Email or phone number is required");
+    }
+
+    const parsed = parseEmailOrPhone(identifier);
+    if (!parsed.type) {
+        throw new ApiError(400, "Please enter a valid email or phone number");
+    }
+
+    const user = parsed.type === "email"
+        ? await User.findOne({ email: parsed.email })
+        : await User.findOne({ phoneNumber: parsed.phone });
     if (!user) throw new ApiError(404, "User not found");
 
+    const isPhoneOnly = user.email.startsWith(PLACEHOLDER_EMAIL_PREFIX);
+
+    if (isPhoneOnly) {
+        try {
+            await sendOTP(toE164(user.phoneNumber), "sms");
+        } catch (err) {
+            console.error("[SMS] Forgot-password OTP failed:", err?.message || err);
+            throw new ApiError(
+                503,
+                err?.message || "We could not send the code to your phone. Please try again."
+            );
+        }
+        return res.json(
+            new ApiResponse(200, {
+                email: user.email,
+                channel: "phone",
+                phoneHint: user.phoneNumber ? user.phoneNumber.slice(-4) : null,
+            }, "A verification code has been sent to your phone.")
+        );
+    }
+
     const otp = generateOTP();
+    await Otp.create({ userId: user._id, purpose: "forgotPassword", otp });
 
-    await Otp.create({
-        userId: user._id,
-        purpose: "forgotPassword",
-        otp
-    });
-
-    // Must await in serverless so the function stays alive until SMTP send completes.
     try {
         await transporter.sendMail({
             from: getDefaultFrom(),
@@ -288,21 +449,34 @@ const forgotPassword = asyncHandler(async (req, res) => {
     }
 
     return res.json(
-        new ApiResponse(200, {}, "An OTP has been sent to your email address.")
+        new ApiResponse(200, { email: user.email, channel: "email" }, "An OTP has been sent to your email address.")
     );
 });
 
 const verifyOtp = asyncHandler(async (req, res) => {
-
     const { otp, email, purpose = "forgotPassword" } = req.body;
+
+    if (!email || !otp) {
+        throw new ApiError(400, "Email and OTP are required");
+    }
 
     const user = await User.findOne({ email });
     if (!user) throw new ApiError(404, "User not found");
 
+    const isPhoneOnly = user.email.startsWith(PLACEHOLDER_EMAIL_PREFIX);
+
+    if (isPhoneOnly && purpose === "forgotPassword") {
+        const result = await verifyOTP(toE164(user.phoneNumber), String(otp).trim());
+        if (!result.success) throw new ApiError(400, "Invalid or expired OTP");
+        return res.json(
+            new ApiResponse(200, { otp, email: user.email }, "OTP verified successfully")
+        );
+    }
+
     const otpData = await Otp.findOne({
         userId: user._id,
         purpose,
-        otp,
+        otp: String(otp).trim(),
     });
 
     if (!otpData) {
@@ -314,13 +488,124 @@ const verifyOtp = asyncHandler(async (req, res) => {
         throw new ApiError(400, "OTP expired");
     }
 
-
-
     return res.json(
-        new ApiResponse(200, { otp }, "OTP verified successfully")
+        new ApiResponse(200, { otp, email: user.email }, "OTP verified successfully")
     );
+});
 
-})
+const sendLoginOTP = asyncHandler(async (req, res) => {
+    const { emailOrPhone } = req.body;
+
+    if (!emailOrPhone) {
+        throw new ApiError(400, "Email or phone number is required");
+    }
+
+    const parsed = parseEmailOrPhone(emailOrPhone);
+    if (!parsed.type) {
+        throw new ApiError(400, "Please enter a valid email or phone number");
+    }
+
+    const user = parsed.type === "email"
+        ? await User.findOne({ email: parsed.email })
+        : await User.findOne({ phoneNumber: parsed.phone });
+    if (!user) throw new ApiError(404, "User not found");
+
+    if (parsed.type === "email") {
+        const otp = generateOTP();
+        await Otp.create({ userId: user._id, purpose: "login", otp });
+        try {
+            await transporter.sendMail({
+                from: getDefaultFrom(),
+                to: user.email,
+                ...authOTPTemplate(otp, "login"),
+            });
+        } catch (err) {
+            await Otp.deleteOne({ userId: user._id, purpose: "login" });
+            console.error("[Email] Login OTP failed:", err?.message || err);
+            throw new ApiError(
+                503,
+                "We could not send the code to your email. Please try again."
+            );
+        }
+        return res.json(
+            new ApiResponse(200, {
+                requiresOTP: true,
+                email: user.email,
+                channel: "email",
+            }, "Verification code sent to your email.")
+        );
+    }
+
+    try {
+        await sendOTP(toE164(parsed.phone), "sms");
+    } catch (err) {
+        console.error("[SMS] Login OTP failed:", err?.message || err);
+        throw new ApiError(
+            503,
+            err?.message || "We could not send the code to your phone. Please try again."
+        );
+    }
+    return res.json(
+        new ApiResponse(200, {
+            requiresOTP: true,
+            email: user.email,
+            channel: "phone",
+            phoneHint: parsed.phone ? parsed.phone.slice(-4) : null,
+        }, "Verification code sent to your phone.")
+    );
+});
+
+const verifyLoginOTP = asyncHandler(async (req, res) => {
+    const { emailOrPhone, otp } = req.body;
+
+    if (!emailOrPhone || !otp) {
+        throw new ApiError(400, "Email/phone and OTP are required");
+    }
+
+    const parsed = parseEmailOrPhone(emailOrPhone);
+    if (!parsed.type) {
+        throw new ApiError(400, "Please enter a valid email or phone number");
+    }
+
+    const user = parsed.type === "email"
+        ? await User.findOne({ email: parsed.email })
+        : await User.findOne({ phoneNumber: parsed.phone });
+    if (!user) throw new ApiError(404, "User not found");
+
+    if (parsed.type === "email") {
+        const otpData = await Otp.findOne({ userId: user._id, purpose: "login", otp: String(otp).trim() });
+        if (!otpData) throw new ApiError(400, "Invalid or expired OTP");
+        if (otpData.expiresAt < Date.now()) {
+            await otpData.deleteOne();
+            throw new ApiError(400, "OTP expired");
+        }
+        await Otp.deleteOne({ userId: user._id, purpose: "login" });
+    } else {
+        const result = await verifyOTP(toE164(parsed.phone), String(otp).trim());
+        if (!result.success) throw new ApiError(400, "Invalid or expired OTP");
+    }
+
+    const { accessToken, refreshToken } = await generateAccessTokenAndRefreshToken(user._id);
+    const loggedInUser = await User.findById(user._id).select("-password -refreshToken");
+
+    const options = {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+    };
+
+    return res
+        .status(200)
+        .cookie("accessToken", accessToken, options)
+        .cookie("refreshToken", refreshToken, options)
+        .json(
+            new ApiResponse(200, {
+                user: loggedInUser,
+                accessToken,
+                refreshToken,
+            }, "Login successful")
+        );
+});
 
 const resetPassword = asyncHandler(async (req, res) => {
     const { newPassword, email } = req.body;
@@ -340,7 +625,6 @@ const resetPassword = asyncHandler(async (req, res) => {
         userId: user._id,
         purpose: "forgotPassword",
     });
-
 
     return res.json(
         new ApiResponse(200, {}, "Password reset successful")
@@ -432,6 +716,6 @@ const appleLogin = asyncHandler(async (req, res) => {
 
 });
 
-export { registerUser, verifyOtp, loginUser, logoutUser, refreshAccessToken, resetPassword, forgotPassword, getCurrentUser, appleLogin, googleLogin };
+export { registerUser, verifySignup, resendSignupOTP, verifyOtp, loginUser, logoutUser, refreshAccessToken, resetPassword, forgotPassword, getCurrentUser, appleLogin, googleLogin, sendLoginOTP, verifyLoginOTP };
 
 

@@ -1,3 +1,30 @@
+export const authOTPTemplate = (otp, context = "verification") => {
+    return {
+        subject: "TasQuash Verification Code",
+        html: `
+      <div style="font-family: Arial, sans-serif; background-color: #f9fafb; padding: 24px;">
+        <div style="max-width: 500px; margin: auto; background: #ffffff; padding: 24px; border-radius: 8px;">
+          <h2 style="color: #111827; margin-bottom: 16px;">TasQuash Verification Code</h2>
+          <p style="color: #374151; font-size: 14px;">
+            Use this code to ${context === "register" ? "complete your registration" : "sign in to your account"}.
+          </p>
+          <p style="color: #374151; font-size: 14px; margin-top: 16px;">Your One Time Password (OTP):</p>
+          <div style="font-size: 28px; font-weight: bold; letter-spacing: 4px; color: #111827; margin: 16px 0;">
+            ${otp}
+          </div>
+          <p style="color: #6b7280; font-size: 13px;">
+            This code is valid for 10 minutes. Do not share this code with anyone.
+          </p>
+          <hr style="margin: 24px 0; border: none; border-top: 1px solid #e5e7eb;" />
+          <p style="color: #9ca3af; font-size: 12px;">
+            © ${new Date().getFullYear()} TasQuash. All rights reserved.
+          </p>
+        </div>
+      </div>
+    `,
+    };
+};
+
 export const forgotPasswordOTPTemplate = (otp) => {
   return {
     subject: "TasQuash Password Reset Code",

@@ -69,6 +69,12 @@ const userSchema = new mongoose.Schema(
         phoneNumber: {
             type: String,
             trim: true,
+            unique: true,
+            sparse: true,
+        },
+        isEmailVerified: {
+            type: Boolean,
+            default: false
         },
         isPhoneVerified: {
             type: Boolean,

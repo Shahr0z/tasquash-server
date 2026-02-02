@@ -1,4 +1,4 @@
-import dotenv from "dotenv";
+import "dotenv/config";
 import Express from "express";
 import cookieParser from "cookie-parser";
 import cors from "cors";
@@ -6,8 +6,6 @@ import connectDB from "./db/index.js";
 import userRoutes from "./routes/user.routes.js";
 import skillRoutes from "./routes/skill.routes.js";
 import twoFactorRoutes from "./routes/twoFactor.routes.js";
-
-dotenv.config({ quiet: true });
 
 const app = Express();
 

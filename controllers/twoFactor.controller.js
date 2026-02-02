@@ -133,13 +133,16 @@ const disable2FA = asyncHandler(async (req, res) => {
 
 
 const send2FAOTP = asyncHandler(async (req, res) => {
-    const { phoneNumber } = req.body;
+    const { phoneNumber, email } = req.body;
 
-    if (!phoneNumber) {
-        throw new ApiError(400, "Phone number is required");
+    let user;
+    if (email) {
+        user = await User.findOne({ email });
+    } else if (phoneNumber) {
+        user = await User.findOne({ phoneNumber });
+    } else {
+        throw new ApiError(400, "Email or phone number is required");
     }
-
-    const user = await User.findOne({ phoneNumber });
 
     if (!user) {
         throw new ApiError(404, "User not found");
@@ -154,8 +157,9 @@ const send2FAOTP = asyncHandler(async (req, res) => {
             throw new ApiError(400, "Phone number not verified for 2FA");
         }
 
+        const toE164 = user.phoneNumber.startsWith("+") ? user.phoneNumber : `+${user.phoneNumber}`;
         try {
-            await sendOTP(user.phoneNumber, "sms");
+            await sendOTP(toE164, "sms");
         } catch (err) {
             const message = err?.message || "Failed to send OTP";
             console.error("send2FAOTP Twilio error:", message);
@@ -176,13 +180,18 @@ const send2FAOTP = asyncHandler(async (req, res) => {
 
 
 const verify2FAOTP = asyncHandler(async (req, res) => {
-    const { phoneNumber, code } = req.body;
+    const { phoneNumber, email, code } = req.body;
 
-    if (!phoneNumber || !code) {
-        throw new ApiError(400, "Phone number and OTP code are required");
+    if (!code) {
+        throw new ApiError(400, "OTP code is required");
+    }
+    if (!phoneNumber && !email) {
+        throw new ApiError(400, "Email or phone number is required");
     }
 
-    const user = await User.findOne({ phoneNumber });
+    const user = email
+        ? await User.findOne({ email })
+        : await User.findOne({ phoneNumber });
 
     if (!user) {
         throw new ApiError(404, "User not found");
@@ -193,9 +202,10 @@ const verify2FAOTP = asyncHandler(async (req, res) => {
     }
 
     if (user.twoFactorMethod === "sms") {
+        const toE164 = user.phoneNumber.startsWith("+") ? user.phoneNumber : `+${user.phoneNumber}`;
         let result;
         try {
-            result = await verifyOTP(user.phoneNumber, String(code).trim());
+            result = await verifyOTP(toE164, String(code).trim());
         } catch (err) {
             const message = err?.message || "Verification failed";
             console.error("verify2FAOTP Twilio error:", message);
