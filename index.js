@@ -21,11 +21,13 @@ app.use((req, res, next) => {
     next();
 });
 
-const corsOrigin = (process.env.CORS_ORIGIN || "").trim();
+const corsOrigin = (process.env.CORS_ORIGIN || "*").trim();
 app.use(
     cors({
-        origin: corsOrigin === "*" ? true : (corsOrigin || true),
+        origin: corsOrigin === "*" ? true : corsOrigin,
         credentials: true,
+        methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allowedHeaders: ["Content-Type", "Authorization"],
     })
 );
 
@@ -56,7 +58,11 @@ app.use(async (req, res, next) => {
         await ensureDbConnection();
         next();
     } catch (err) {
-        next(err);
+        console.error("[DB] Connection failed:", err?.message || err);
+        res.status(503).json({
+            success: false,
+            message: "Database unavailable. Please try again shortly.",
+        });
     }
 });
 

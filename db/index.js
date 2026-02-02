@@ -22,8 +22,13 @@ const connectDB = async () => {
         );
     }
 
+    const options = {
+        serverSelectionTimeoutMS: 10000,
+        connectTimeoutMS: 10000,
+    };
+
     try {
-        const connectionInstance = await mongoose.connect(uri);
+        const connectionInstance = await mongoose.connect(uri, options);
         console.log(
             `MongoDB is Hosted !! on : ${connectionInstance.connection.host}`
         );
