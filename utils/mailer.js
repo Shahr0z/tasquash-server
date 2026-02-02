@@ -81,8 +81,8 @@ export function isEmailConfigured() {
 }
 
 /**
- * Send an email. Validates config, awaits send (required for serverless so the function stays alive),
- * and logs outcome. Throws on failure so callers can return 503.
+ * Send an email with a hard timeout so serverless always responds (no hang → no "Network Error" on client).
+ * Validates config, awaits send, and logs outcome. Throws on failure so callers can return 503.
  *
  * @param {object} options - Nodemailer sendMail options: { from, to, subject, html, ... }
  * @returns {Promise<object>} Nodemailer result
@@ -90,10 +90,22 @@ export function isEmailConfigured() {
 export async function sendEmail(options) {
     const { to, subject } = options;
     const logCtx = { to, subject, env: process.env.NODE_ENV };
+    const isVercel = !!process.env.VERCEL;
+    const sendTimeoutMs = isVercel ? 7000 : 12000;
+
+    const sendWithTimeout = () => {
+        const transporter = getTransporter();
+        return transporter.sendMail(options);
+    };
+
+    const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => {
+            reject(new Error(`Email send timeout after ${sendTimeoutMs}ms`));
+        }, sendTimeoutMs);
+    });
 
     try {
-        const transporter = getTransporter();
-        const result = await transporter.sendMail(options);
+        const result = await Promise.race([sendWithTimeout(), timeoutPromise]);
         console.log("[Email] Sent successfully", { ...logCtx, messageId: result.messageId });
         return result;
     } catch (err) {
