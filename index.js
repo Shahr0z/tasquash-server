@@ -6,6 +6,9 @@ import connectDB from "./db/index.js";
 import userRoutes from "./routes/user.routes.js";
 import skillRoutes from "./routes/skill.routes.js";
 import twoFactorRoutes from "./routes/twoFactor.routes.js";
+import taskRoutes from "./routes/task.routes.js";
+import taskCategoryRoutes from "./routes/taskCategory.routes.js";
+import offerRoutes from "./routes/offer.routes.js";
 
 const app = Express();
 
@@ -74,6 +77,10 @@ app.get("/", (req, res) => {
 app.use("/api/users", userRoutes);
 app.use("/api/skills", skillRoutes);
 app.use("/api/2fa", twoFactorRoutes);
+app.use("/api/task", taskRoutes);
+app.use("/api/tasks", taskRoutes);
+app.use("/api/taskCategory", taskCategoryRoutes);
+app.use("/api/offer", offerRoutes);
 
 app.use((err, req, res, next) => {
     const statusCode = err.statusCode || 500;

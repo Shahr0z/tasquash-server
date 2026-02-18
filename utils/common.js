@@ -2,11 +2,6 @@ export function generateOTP() {
     return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-/**
- * Parses a single string as either email or phone.
- * @param {string} value - User input (email or phone)
- * @returns {{ type: 'email'|'phone', email?: string, phone?: string }}
- */
 export function parseEmailOrPhone(value) {
     if (!value || typeof value !== "string") {
         return { type: null };

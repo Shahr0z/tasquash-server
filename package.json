@@ -13,6 +13,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.985.0",
     "apple-signin-auth": "^1.7.6",
     "bcrypt": "^6.0.0",
     "cookie-parser": "^1.4.7",
@@ -22,6 +23,8 @@
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.1.5",
+    "multer": "^2.0.2",
+    "multer-s3": "^3.0.1",
     "nodemailer": "^7.0.12",
     "twilio": "^5.5.1"
   },
