@@ -122,9 +122,31 @@ const rejectOffer = asyncHandler(async (req, res) => {
     );
 });
 
+const withdrawOffer = asyncHandler(async (req, res) => {
+    const { offerId } = req.params;
+
+    const offer = await Offer.findById(offerId);
+    if (!offer) {
+        throw new ApiError(404, "Offer not found");
+    }
+    if (offer.userId.toString() !== req.user._id.toString()) {
+        throw new ApiError(403, "You can only withdraw your own offer");
+    }
+    if (offer.status !== "pending") {
+        throw new ApiError(400, "Only pending offers can be withdrawn");
+    }
+
+    await Offer.findByIdAndDelete(offerId);
+
+    return res.json(
+        new ApiResponse(200, { _id: offerId }, "Offer withdrawn successfully")
+    );
+});
+
 export {
     createOffer,
     getTaskOffers,
     acceptOffer,
-    rejectOffer
+    rejectOffer,
+    withdrawOffer
 };

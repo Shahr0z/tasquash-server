@@ -121,7 +121,14 @@ const createTask = asyncHandler(async (req, res) => {
         throw new ApiError(401, "Unauthorized request");
     }
 
-    const { title, description, range, reward, deadLine, category, reach } = req.body;
+    let { title, description, range, reward, deadLine, category, reach } = req.body;
+    if (typeof range === "string") {
+        try {
+            range = JSON.parse(range);
+        } catch (_) {
+            // leave range as-is for normalizeRange to reject
+        }
+    }
 
     if (!title || !title.trim()) {
         throw new ApiError(400, "Title is required");
