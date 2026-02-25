@@ -3,6 +3,7 @@ import { asyncHandler } from "../utils/AsyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import Task from "../models/task.model.js";
+import TaskCategory from "../models/taskCategory.model.js";
 import Offer from "../models/offer.model.js";
 
 const TASK_POPULATE_CONFIG = [
@@ -28,6 +29,30 @@ const ensureObjectId = (value, label) => {
     if (!mongoose.Types.ObjectId.isValid(value)) {
         throw new ApiError(400, `Invalid ${label || "identifier"}`);
     }
+};
+
+/** Resolve category to ObjectId: if payload { code, title, ... } then find-or-create; else treat as id. */
+const resolveCategoryId = async (category) => {
+    if (category == null || category === "") {
+        return null;
+    }
+    if (typeof category === "object" && category.code && category.title) {
+        let doc = await TaskCategory.findOne({ code: category.code });
+        if (!doc) {
+            doc = await TaskCategory.create({
+                code: category.code,
+                title: category.title,
+                description: category.description,
+                pageLink: category.pageLink,
+            });
+        }
+        return doc._id;
+    }
+    const id = typeof category === "object" ? category._id || category.id : category;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+        throw new ApiError(400, "Invalid category id");
+    }
+    return id;
 };
 
 const normalizeRange = (input, { required = false } = {}) => {
@@ -129,6 +154,11 @@ const createTask = asyncHandler(async (req, res) => {
             // leave range as-is for normalizeRange to reject
         }
     }
+    if (typeof category === "string" && category.trim().startsWith("{")) {
+        try {
+            category = JSON.parse(category);
+        } catch (_) {}
+    }
 
     if (!title || !title.trim()) {
         throw new ApiError(400, "Title is required");
@@ -136,7 +166,10 @@ const createTask = asyncHandler(async (req, res) => {
     if (!category) {
         throw new ApiError(400, "Category is required");
     }
-    ensureObjectId(category, "category id");
+    const categoryId = await resolveCategoryId(category);
+    if (!categoryId) {
+        throw new ApiError(400, "Category is required");
+    }
 
     const normalizedRange = normalizeRange(range, { required: true });
     const normalizedDeadline = parseDeadline(deadLine, { required: true });
@@ -150,7 +183,7 @@ const createTask = asyncHandler(async (req, res) => {
         range: normalizedRange,
         reward: normalizedReward,
         deadLine: normalizedDeadline,
-        category,
+        category: categoryId,
         reach: sanitizeReach(reach) ?? "local",
         attachments,
     });
@@ -216,8 +249,16 @@ const updateTask = asyncHandler(async (req, res) => {
     }
 
     if (req.body.category !== undefined) {
-        ensureObjectId(req.body.category, "category id");
-        updates.category = req.body.category;
+        let cat = req.body.category;
+        if (typeof cat === "string" && cat.trim().startsWith("{")) {
+            try {
+                cat = JSON.parse(cat);
+            } catch (_) {}
+        }
+        updates.category = await resolveCategoryId(cat);
+        if (!updates.category) {
+            throw new ApiError(400, "Invalid category");
+        }
     }
 
     if (req.body.reach !== undefined) {

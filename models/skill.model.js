@@ -31,6 +31,10 @@ const skillSchema = new mongoose.Schema({
         enum: ["local", "regional", "global"],
         default: "local"
     },
+    category: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "TaskCategory",
+    },
     status: {
         type: String,
         enum: ["active", "inactive"],

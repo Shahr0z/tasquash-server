@@ -4,7 +4,7 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import TaskCategory from "../models/taskCategory.model.js";
 
 const createTaskCategory = asyncHandler(async (req, res) => {
-    const { title, description } = req.body;
+    const { title, description, code, pageLink } = req.body;
 
     if (!title) {
         throw new ApiError(400, "Required fields are missing");
@@ -13,10 +13,35 @@ const createTaskCategory = asyncHandler(async (req, res) => {
     const taskCategory = await TaskCategory.create({
         title,
         description,
+        code: code || undefined,
+        pageLink: pageLink || undefined,
     });
 
     return res.status(201).json(
         new ApiResponse(201, taskCategory, "Task category created successfully")
+    );
+});
+
+/** Find by code or create. Used when tagging task/skill from enlecs API result. */
+const findOrCreateTaskCategory = asyncHandler(async (req, res) => {
+    const { code, title, description, pageLink } = req.body;
+
+    if (!code || !title) {
+        throw new ApiError(400, "code and title are required");
+    }
+
+    let taskCategory = await TaskCategory.findOne({ code });
+    if (!taskCategory) {
+        taskCategory = await TaskCategory.create({
+            code,
+            title,
+            description: description || undefined,
+            pageLink: pageLink || undefined,
+        });
+    }
+
+    return res.json(
+        new ApiResponse(200, taskCategory, "Task category resolved")
     );
 });
 
@@ -66,6 +91,7 @@ const deleteTaskCategory = asyncHandler(async (req, res) => {
 export {
     createTaskCategory,
     getAllTaskCategories,
+    findOrCreateTaskCategory,
     updateTaskCategory,
     deleteTaskCategory,
 };
