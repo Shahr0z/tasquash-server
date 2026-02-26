@@ -57,11 +57,17 @@ const getAllTaskCategories = asyncHandler(async (req, res) => {
 
 const updateTaskCategory = asyncHandler(async (req, res) => {
     const { taskCategoryId } = req.params;
-    const { title, description } = req.body;
+    const { title, description, code, pageLink } = req.body;
+
+    const updates = {};
+    if (title !== undefined) updates.title = title;
+    if (description !== undefined) updates.description = description;
+    if (code !== undefined) updates.code = code;
+    if (pageLink !== undefined) updates.pageLink = pageLink;
 
     const taskCategory = await TaskCategory.findByIdAndUpdate(
         taskCategoryId,
-        { title, description },
+        updates,
         { new: true, runValidators: true }
     );
 

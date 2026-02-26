@@ -146,7 +146,7 @@ const createTask = asyncHandler(async (req, res) => {
         throw new ApiError(401, "Unauthorized request");
     }
 
-    let { title, description, range, reward, deadLine, category, reach } = req.body;
+    let { title, description, range, reward, deadLine, category, reach, userRole, distance, competenceDomain, recruiterComment, recruiterRating } = req.body;
     if (typeof range === "string") {
         try {
             range = JSON.parse(range);
@@ -176,7 +176,7 @@ const createTask = asyncHandler(async (req, res) => {
     const normalizedReward = parseReward(reward, { required: true });
     const attachments = collectAttachments(req.files);
 
-    const task = await Task.create({
+    const taskPayload = {
         userId,
         title: title.trim(),
         description,
@@ -186,7 +186,14 @@ const createTask = asyncHandler(async (req, res) => {
         category: categoryId,
         reach: sanitizeReach(reach) ?? "local",
         attachments,
-    });
+    };
+    if (userRole && ["Recruiter", "Quasher"].includes(userRole)) taskPayload.userRole = userRole;
+    if (distance != null && !Number.isNaN(Number(distance))) taskPayload.distance = Number(distance);
+    if (competenceDomain != null && String(competenceDomain).trim()) taskPayload.competenceDomain = String(competenceDomain).trim();
+    if (recruiterComment != null) taskPayload.recruiterComment = String(recruiterComment);
+    if (recruiterRating != null && !Number.isNaN(Number(recruiterRating))) taskPayload.recruiterRating = Number(recruiterRating);
+
+    const task = await Task.create(taskPayload);
 
     const populatedTask = await withTaskRelations(Task.findById(task._id));
 
@@ -275,6 +282,24 @@ const updateTask = asyncHandler(async (req, res) => {
             throw new ApiError(400, "Invalid task status");
         }
         updates.status = req.body.status;
+    }
+
+    if (req.body.userRole !== undefined && ["Recruiter", "Quasher"].includes(req.body.userRole)) {
+        updates.userRole = req.body.userRole;
+    }
+    if (req.body.distance !== undefined) {
+        const d = Number(req.body.distance);
+        updates.distance = Number.isNaN(d) ? null : d;
+    }
+    if (req.body.competenceDomain !== undefined) {
+        updates.competenceDomain = req.body.competenceDomain ? String(req.body.competenceDomain).trim() : null;
+    }
+    if (req.body.recruiterComment !== undefined) {
+        updates.recruiterComment = req.body.recruiterComment;
+    }
+    if (req.body.recruiterRating !== undefined) {
+        const r = Number(req.body.recruiterRating);
+        updates.recruiterRating = Number.isNaN(r) ? null : r;
     }
 
     const attachments = collectAttachments(req.files);

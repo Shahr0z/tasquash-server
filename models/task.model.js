@@ -52,12 +52,42 @@ const taskSchema = new mongoose.Schema({
             type: String
         }
     ],
-
+    /** Optional: 'Recruiter' | 'Quasher' (task creator role). Can also be derived from userId.role. */
+    userRole: {
+        type: String,
+        enum: ["Recruiter", "Quasher"],
+        default: "Recruiter"
+    },
+    /** Optional: distance (e.g. km). */
+    distance: {
+        type: Number,
+        default: null
+    },
+    /** Optional: competence domain label (can align with category). */
+    competenceDomain: {
+        type: String,
+        default: null
+    },
+    /** Optional: recruiter comment on the task. */
+    recruiterComment: {
+        type: String,
+        default: null
+    },
+    /** Optional: recruiter rating at task creation (float). */
+    recruiterRating: {
+        type: Number,
+        default: null
+    },
 
 }, {
     timestamps: true,
     toJSON: { virtuals: true },
     toObject: { virtuals: true }
+});
+
+/** Closed flag derived from status (for API compatibility). */
+taskSchema.virtual("closed").get(function () {
+    return this.status === "closed";
 });
 
 taskSchema.virtual("offers", {
